@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: livewire_app
+    restart: always
+    working_dir: /var/www
+    volumes:
+      - .:/var/www
+    networks:
+      - livewire_network
+    depends_on:
+      - db
+      - redis
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - APP_KEY=${APP_KEY}
+      - DB_HOST=db
+      - DB_DATABASE=crypto_db
+      - DB_USERNAME=root
+      - DB_PASSWORD=root
+      - BROADCAST_DRIVER=pusher
+      - CACHE_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - SESSION_DRIVER=redis
+
+  webserver:
+    image: nginx:latest
+    container_name: livewire_web
+    restart: always
+    ports:
+      - "8000:80"
+    volumes:
+      - .:/var/www
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - livewire_network
+
+  db:
+    image: mysql:8
+    container_name: livewire_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: crypto_db
+    ports:
+      - "3306:3306"
+    networks:
+      - livewire_network
+    volumes:
+      - db_data:/var/lib/mysql
+
+  redis:
+    image: redis:latest
+    container_name: livewire_redis
+    restart: always
+    networks:
+      - livewire_network
+    ports:
+      - "6379:6379"
+
+  pusher:
+    image: pusher/pusher-server
+    container_name: livewire_pusher
+    restart: always
+    networks:
+      - livewire_network
+    ports:
+      - "6001:6001"
+
+networks:
+  livewire_network:
+
+volumes:
+  db_data:
