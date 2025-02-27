@@ -8,6 +8,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use GuzzleHttp\Client;
+use GuzzleHttp\Promise\Utils;
 use App\Models\CryptoPair;
 use App\Models\Exchange;
 use App\Models\PriceUpdate;
@@ -19,60 +20,64 @@ class FetchCryptoPrices implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * Create a new job instance.
-     */
-    public function __construct()
-    {
-        //
-    }
-
-    /**
      * Execute the job.
      */
+    public function __construct(protected ?Client $client = null)
+    {
+
+    }
+
     public function handle(): void
     {
-        $client = new Client();
-        $pairs = CryptoPair::all()->keyBy('symbol'); 
+        $client = $this->client ?? new Client();
+        $pairs = CryptoPair::all()->keyBy('symbol');
         $exchanges = Exchange::all()->keyBy('name');
 
+        $promises = [];
         $prices = [];
 
         foreach ($exchanges as $exchangeName => $exchange) {
-            //we have to extract the symbols
-            $symbols = implode("+", $pairs->keys()->toArray());
-
+            $symbols = implode("+", $pairs->keys()->toArray()); // Convert symbols to a proper string
             $url = "https://api.freecryptoapi.com/v1/getData?symbol={$symbols}@{$exchangeName}";
 
-            try {
-                $response = $client->get($url, [
-                    'headers' => ['Authorization' => 'Bearer ' . env('CRYPTO_API_KEY')]
-                ]);
+            // Create async request for each exchange
+            $promises[$exchangeName] = $client->getAsync($url, [
+                'headers' => ['Authorization' => 'Bearer ' . env('CRYPTO_API_KEY')]
+            ])->then(
+                function ($response) use ($exchangeName, $pairs, $exchange, &$prices) {
+                    $data = json_decode($response->getBody(), true);
 
-                $data = json_decode($response->getBody(), true);
-                foreach ($data['symbols'] as $symbolData) {
-                    if ($pairs->has($symbolData['symbol'])) {
-                        $priceUpdate = PriceUpdate::create([
-                            'crypto_pair_id' => $pairs[$symbolData['symbol']]->id,
-                            'exchange_id' => $exchange->id,
-                            'price' => $symbolData['last'],
-                            'change_percentage' => $symbolData['daily_change_percentage'],
-                            'retrieved_at' => now(),
-                        ]);
+                    if (isset($data['symbols']) && is_array($data['symbols'])) {
+                        foreach ($data['symbols'] as $symbolData) {
+                            if (isset($pairs[$symbolData['symbol']])) {
+                                PriceUpdate::create([
+                                    'crypto_pair_id' => $pairs[$symbolData['symbol']]->id,
+                                    'exchange_id' => $exchange->id,
+                                    'price' => $symbolData['last'],
+                                    'change_percentage' => $symbolData['daily_change_percentage'],
+                                    'retrieved_at' => now(),
+                                ]);
 
-                        // Collect prices for broadcasting
-                        $prices[] = [
-                            'symbol' => $symbolData['symbol'],
-                            'price' => $symbolData['last'],
-                            'change' => $symbolData['daily_change_percentage'],
-                            'exchange' => $exchangeName,
-                            'last_updated' => now()->toDateTimeString(),
-                        ];
+                                // Collect prices for broadcasting
+                                $prices[] = [
+                                    'symbol' => $symbolData['symbol'],
+                                    'price' => $symbolData['last'],
+                                    'change' => $symbolData['daily_change_percentage'],
+                                    'exchange' => $exchangeName,
+                                    'last_updated' => now()->toDateTimeString(),
+                                ];
+                            }
+                        }
                     }
+                },
+                function ($exception) use ($exchangeName) {
+                    Log::error("Error fetching data from {$exchangeName}: " . $exception->getMessage());
                 }
-            } catch (\Exception $e) {
-                Log::error("Error fetching data from {$exchangeName}: " . $e->getMessage());
-            }
+            );
         }
+
+        // Execute all API calls asynchronously
+        Utils::settle($promises)->wait();
 
         if (!empty($prices)) {
             // Broadcast the updated prices
