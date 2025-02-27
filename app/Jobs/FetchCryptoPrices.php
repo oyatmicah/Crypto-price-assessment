@@ -31,39 +31,53 @@ class FetchCryptoPrices implements ShouldQueue
      */
     public function handle(): void
     {
-        event(new CryptoPriceUpdated());
         $client = new Client();
-        $pairs = CryptoPair::pluck('symbol')->toArray();
-        $exchanges = Exchange::pluck('name')->toArray();
+        $pairs = CryptoPair::all()->keyBy('symbol'); 
+        $exchanges = Exchange::all()->keyBy('name');
 
-        foreach ($exchanges as $exchange) {
-            $symbols = implode("+", $pairs);
-            $url = "https://api.freecryptoapi.com/v1/getData?symbol={$symbols}@{$exchange}";
+        $prices = [];
+
+        foreach ($exchanges as $exchangeName => $exchange) {
+            //we have to extract the symbols
+            $symbols = implode("+", $pairs->keys()->toArray());
+
+            $url = "https://api.freecryptoapi.com/v1/getData?symbol={$symbols}@{$exchangeName}";
 
             try {
                 $response = $client->get($url, [
-                    'headers' => ['Authorization' => 'Bearer YOUR_ACCESS_TOKEN']
+                    'headers' => ['Authorization' => 'Bearer ' . env('CRYPTO_API_KEY')]
                 ]);
 
                 $data = json_decode($response->getBody(), true);
-
                 foreach ($data['symbols'] as $symbolData) {
-                    $pair = CryptoPair::where('symbol', $symbolData['symbol'])->first();
-                    $exchangeModel = Exchange::where('name', $exchange)->first();
-
-                    if ($pair && $exchangeModel) {
-                        PriceUpdate::create([
-                            'crypto_pair_id' => $pair->id,
-                            'exchange_id' => $exchangeModel->id,
+                    if ($pairs->has($symbolData['symbol'])) {
+                        $priceUpdate = PriceUpdate::create([
+                            'crypto_pair_id' => $pairs[$symbolData['symbol']]->id,
+                            'exchange_id' => $exchange->id,
                             'price' => $symbolData['last'],
                             'change_percentage' => $symbolData['daily_change_percentage'],
                             'retrieved_at' => now(),
                         ]);
+
+                        // Collect prices for broadcasting
+                        $prices[] = [
+                            'symbol' => $symbolData['symbol'],
+                            'price' => $symbolData['last'],
+                            'change' => $symbolData['daily_change_percentage'],
+                            'exchange' => $exchangeName,
+                            'last_updated' => now()->toDateTimeString(),
+                        ];
                     }
                 }
             } catch (\Exception $e) {
-                Log::error("Error fetching data from {$exchange}: " . $e->getMessage());
+                Log::error("Error fetching data from {$exchangeName}: " . $e->getMessage());
             }
+        }
+
+        if (!empty($prices)) {
+            // Broadcast the updated prices
+            event(new CryptoPriceUpdated($prices));
+            Log::info('Broadcasting Crypto Prices', ['prices' => $prices]);
         }
     }
 }

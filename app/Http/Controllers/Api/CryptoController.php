@@ -5,11 +5,12 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\PriceUpdate;
 use Illuminate\Http\Request;
+use App\Services\CryptoPriceService;
 
 class CryptoController extends Controller
 {
-    public function getPrices()
+    public function getPrices(CryptoPriceService $cryptoPriceService)
     {
-        return response()->json(PriceUpdate::with(['cryptoPair', 'exchange'])->latest()->get());
+        return response()->json($cryptoPriceService->getFormattedPrices());
     }
 }

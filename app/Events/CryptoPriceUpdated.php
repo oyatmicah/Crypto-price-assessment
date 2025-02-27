@@ -17,28 +17,14 @@ class CryptoPriceUpdated implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
-    public $prices;
+    public array $prices;
 
     /**
      * Create a new event instance.
      */
-    public function __construct()
+    public function __construct(array $prices)
     {
-        $this->prices = PriceUpdate::with(['cryptoPair', 'exchange'])
-            ->latest()
-            ->get()
-            ->groupBy('crypto_pair_id')
-            ->map(function ($updates) {
-                $first = $updates->first();
-                return [
-                    'pair' => $first->cryptoPair->symbol,
-                    'average_price' => round($updates->avg('price'), 2),
-                    'change_percentage' => $first->change_percentage,
-                    'last_updated' => Carbon::parse($update->retrieved_at)->timezone('Africa/Lagos')->diffForHumans(),
-                    // 'last_updated' => Carbon::parse($first->retrieved_at)->diffForHumans(),
-                    'exchanges' => $updates->pluck('exchange.name')->implode(', ')
-                ];
-            })->values();
+        $this->prices = $prices;
     }
 
     /**
@@ -51,8 +37,8 @@ class CryptoPriceUpdated implements ShouldBroadcastNow
         return new Channel('crypto-prices');
     }
 
-    public function broadcastAs()
+    public function broadcastWith()
     {
-        return 'price.updated';
+        return ['prices' => $this->prices];
     }
 }
